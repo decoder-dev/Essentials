@@ -1,9 +1,14 @@
 ﻿using System;
+using System.IO;
 using System.Threading.Tasks;
 using Android.Content;
 using Android.Content.PM;
+using Android.Graphics;
+using Android.Media;
 using Android.Provider;
+using Java.Util.Zip;
 using AndroidUri = Android.Net.Uri;
+using Path = System.IO.Path;
 
 namespace Xamarin.Essentials
 {
@@ -39,7 +44,11 @@ namespace Xamarin.Essentials
 
                 await IntermediateActivity.StartAsync(pickerIntent, Platform.requestCodeMediaPicker, onResult: OnResult);
 
-                return new FileResult(path);
+                // Ensure the file is rotated to the upright orientation
+                string filePath = await MediaUtils.OrientateImageForSerialisation(path);
+
+                // Return the file that we just captured
+                return new FileResult(filePath);
             }
             catch (OperationCanceledException)
             {
@@ -96,12 +105,112 @@ namespace Xamarin.Essentials
                 // Start the capture process
                 await IntermediateActivity.StartAsync(capturePhotoIntent, Platform.requestCodeMediaCapture, OnCreate);
 
+                // Ensure the file is rotated to the upright orientation
+                string filePath = await MediaUtils.OrientateImageForSerialisation(tmpFile.AbsolutePath);
+
                 // Return the file that we just captured
-                return new FileResult(tmpFile.AbsolutePath);
+                return new FileResult(filePath);
             }
             catch (OperationCanceledException)
             {
                 return null;
+            }
+        }
+
+        class MediaUtils
+        {
+            /// <summary>
+            /// Serialising the image and sharing it with other platforms like web aren't always able to read orientation prior to presentation, rotate the image to match this
+            /// </summary>
+            /// <param name="image"></param>
+            /// <returns></returns>
+            public static async Task<string> OrientateImageForSerialisation(string path)
+            {
+                var stream = System.IO.File.OpenRead(path);
+
+                byte[] image = new byte[stream.Length];
+                stream.Read(image, 0, image.Length);
+
+                // normalise orientation of images based on exif if present
+                ExifInterface exif = new ExifInterface(System.IO.File.OpenRead(path));
+                System.Console.WriteLine($"{nameof(MediaUtils)}::exif: {exif.ToString()}");
+                if (exif != null)
+                {
+                    int orientation = exif.GetAttributeInt(ExifInterface.TagOrientation, 0);
+                    System.Console.WriteLine($"{nameof(MediaUtils)}::imgOrient: {orientation.ToString()}");
+                    switch (orientation)
+                    {
+                        case 0: // Undefined
+                            break;
+                        case 2: // Flip Horizontal
+                            break;
+                        case 4: // Flip Vertical
+                            break;
+                        case 1: // Orientation normal
+                            break;
+                        case 3: // rotate 180
+                            image = RotateImage(image, 180);
+                            break;
+                        case 8: // rotate 270
+                            image = RotateImage(image, 270);
+                            break;
+                        case 6: // rotate 90
+                            image = RotateImage(image, 90);
+                            break;
+                        case 5: // transpose
+                            break;
+                        case 7: // transverse
+                            break;
+                    }
+                }
+                Bitmap resultBitmap = BitmapFactory.DecodeByteArray(image, 0, image.Length);
+
+                // serialise
+                string newFilename = $"{Path.GetFileNameWithoutExtension(path)}.rotated.jpg";
+                string newPath = Path.Combine(Path.GetDirectoryName(path), newFilename);
+                FileStream outStream = new FileStream(newPath, FileMode.Create);
+
+                await resultBitmap.CompressAsync(Bitmap.CompressFormat.Jpeg, 100, outStream);
+
+                return newPath;
+            }
+
+            public static byte[] RotateImage(byte[] imageData, int rotation = 0)
+            {
+                System.Console.WriteLine($"{nameof(MediaPicker)}::RotateImage by {rotation}");
+
+                // loads just the dimensions of the file instead of the entire image
+                var options = new BitmapFactory.Options { InJustDecodeBounds = true };
+                BitmapFactory.DecodeByteArray(imageData, 0, imageData.Length, options);
+
+                int outHeight = options.OutHeight;
+                int outWidth = options.OutWidth;
+
+                options.InJustDecodeBounds = false;
+
+                // decode image
+                var bitmap = BitmapFactory.DecodeByteArray(imageData, 0, imageData.Length, options);
+                var matrix = new Matrix();
+
+                matrix.PreRotate(rotation);
+
+                bitmap = Bitmap.CreateBitmap(bitmap, 0, 0, bitmap.Width, bitmap.Height, matrix, false);
+                matrix.Dispose();
+                matrix = null;
+
+                byte[] newImageData;
+                int quality = 100;
+
+                using (var stream = new System.IO.MemoryStream())
+                {
+                    bitmap.Compress(Bitmap.CompressFormat.Jpeg, quality, stream);
+                    bitmap.Recycle();
+                    bitmap.Dispose();
+                    bitmap = null;
+                    newImageData = stream.ToArray();
+                }
+
+                return newImageData;
             }
         }
     }

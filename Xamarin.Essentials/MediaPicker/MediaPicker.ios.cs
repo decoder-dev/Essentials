@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
+using CoreGraphics;
 using Foundation;
 using MobileCoreServices;
 using Photos;
@@ -140,6 +141,9 @@ namespace Xamarin.Essentials
             {
                 var img = info.ValueForKey(UIImagePickerController.OriginalImage) as UIImage;
 
+                // assume we want to serialise and share the image
+                img = MediaUtils.OrientateImageForSerialisation(img);
+
                 if (img != null)
                     return new UIImageFileResult(img);
             }
@@ -166,6 +170,84 @@ namespace Xamarin.Essentials
 
             public override void Canceled(UIImagePickerController picker) =>
                 CompletedHandler?.Invoke(null);
+        }
+
+        class MediaUtils
+        {
+            /// <summary>
+            /// Serialising the image and sharing it with other platforms like web aren't always able to read orientation prior to presentation, rotate the image to match this
+            /// </summary>
+            /// <param name="image"></param>
+            /// <returns></returns>
+            public static UIImage OrientateImageForSerialisation(UIImage image)
+            {
+                CGSize size = image.Size;
+                UIGraphics.BeginImageContext(size);
+                CGContext context = UIGraphics.GetCurrentContext();
+                double radians = 0;
+                CGAffineTransform transform = CGAffineTransform.MakeIdentity();
+                switch (image.Orientation)
+                {
+                    case UIImageOrientation.Down:
+                    case UIImageOrientation.DownMirrored:
+                        radians = Math.PI;
+                        context.TranslateCTM(image.Size.Width, image.Size.Height);
+                        context.RotateCTM((nfloat)radians);
+                        break;
+                    case UIImageOrientation.Left:
+                    case UIImageOrientation.LeftMirrored:
+                        radians = Math.PI / 2.0f;
+                        context.TranslateCTM(image.Size.Width, 0);
+                        context.RotateCTM((nfloat)radians);
+                        break;
+                    case UIImageOrientation.Right:
+                    case UIImageOrientation.RightMirrored:
+                        radians = -Math.PI / 2.0f;
+                        context.TranslateCTM(0, image.Size.Height);
+                        context.RotateCTM((nfloat)radians);
+                        break;
+                }
+
+                switch (image.Orientation)
+                {
+                    case UIImageOrientation.UpMirrored:
+                    case UIImageOrientation.DownMirrored:
+                        context.TranslateCTM(image.Size.Width, 0);
+                        context.ScaleCTM(-1, 1);
+                        break;
+                    case UIImageOrientation.LeftMirrored:
+                    case UIImageOrientation.RightMirrored:
+                        context.TranslateCTM(image.Size.Height, 0);
+                        context.ScaleCTM(-1, 1);
+                        break;
+                    case UIImageOrientation.Right:
+                    case UIImageOrientation.Left:
+                        /* flip vertically */
+                        context.ScaleCTM(-1, 1);
+                        context.TranslateCTM(-size.Height, 0);
+                        break;
+                    default:
+                        break;
+                }
+
+                switch (image.Orientation)
+                {
+                    case UIImageOrientation.Left:
+                    case UIImageOrientation.LeftMirrored:
+                    case UIImageOrientation.Right:
+                    case UIImageOrientation.RightMirrored:
+                        context.DrawImage(new CGRect(0, 0, size.Height, size.Width), image.CGImage);
+                        break;
+                    default:
+                        context.DrawImage(new CGRect(0, 0, size.Width, size.Height), image.CGImage);
+                        break;
+                }
+
+                UIImage imageCopy = UIGraphics.GetImageFromCurrentImageContext();
+                UIGraphics.EndImageContext();
+
+                return imageCopy;
+            }
         }
     }
 }
