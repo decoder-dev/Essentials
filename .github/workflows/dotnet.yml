@@ -1,0 +1,60 @@
+name: Build and publish
+
+on:
+  push:
+    branches:
+    - 'net8'
+    - 'net8-*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 8.0.x
+    - name: Setup Java
+      uses: actions/setup-java@v2
+      with:
+        distribution: 'microsoft'
+        java-version: '17'
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+      with:
+        vs-prerelease: true
+    - name: Install iOS workload
+      run: dotnet workload install ios -s https://api.nuget.org/v3/index.json
+    - name: Build and pack
+      run: msbuild Xamarin.Essentials /restore /t:Pack /p:Configuration=Release /p:PackageVersion=1.8.1.3
+    - uses: actions/upload-artifact@master
+      with:
+        name: build-artifacts
+        path: Xamarin.Essentials/bin/Release/Xamarin.Essentials.*.nupkg
+
+  publish:
+    permissions:
+      packages: write
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/net8'
+    steps:
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 8.0.x
+        include-prerelease: true
+    - uses: actions/download-artifact@master
+      with:
+        name: build-artifacts
+        path: build-artifacts
+    - name: Publish
+      if: ${{ github.event_name == 'push' }}
+      env:
+        token: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        dotnet nuget add source https://nuget.pkg.github.com/filipnavara/index.json -n github
+        find build-artifacts -name '*.*nupkg' | xargs -i dotnet nuget push {} -s github --api-key ${{ secrets.GITHUB_TOKEN }}
